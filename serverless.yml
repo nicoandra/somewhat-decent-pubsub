@@ -1,0 +1,221 @@
+
+s3IntegrationResponses: &S3IntegrationResponses
+  - StatusCode: 400
+    SelectionPattern: 4\d{2}
+    ResponseParameters: {}
+    ResponseTemplates: {}
+  - StatusCode: 500
+    SelectionPattern: 5\d{2}
+    ResponseParameters: {}
+    ResponseTemplates: {}
+  - StatusCode: 200
+    SelectionPattern: 2\d{2}
+    ResponseParameters:
+      method.response.header.cache-control: integration.response.header.cache-control
+      method.response.header.Cache-Control: integration.response.header.Cache-Control
+      method.response.header.content-type: integration.response.header.content-type
+      method.response.header.Content-Type: integration.response.header.Content-Type
+    ResponseTemplates: {}
+
+s3MethodResponses: &S3MethodResponses
+  - ResponseParameters:
+      method.response.header.content-type: true
+      method.response.header.Content-Type: true
+      method.response.header.cache-control: true
+      method.response.header.Cache-Control: true
+    ResponseModels: {}
+    StatusCode: 200
+  - ResponseParameters: {}
+    ResponseModels: {}
+    StatusCode: 400
+  - ResponseParameters: {}
+    ResponseModels: {}
+    StatusCode: 500
+
+service: nics-somewhat-decent-pubsub
+useDotenv: true
+frameworkVersion: "3"
+
+provider:
+  stage: ${opt:stage, "development"}
+  lambdaHashingVersion: 20201221
+  name: aws
+  region: us-west-2
+  runtime: nodejs18.x
+  versionFunctions: true
+  timeout: 900
+  endpointType: regional
+  apiGateway:
+    minimumCompressionSize: 1024
+    shouldStartNameWithService: true
+    resourcePolicy:
+      - Effect: Allow
+        Principal: "*"
+        Action: execute-api:Invoke
+        Resource: "*"
+  deploymentBucket:
+    name: ${ssm:/org/account/serverless/deploymentbucket}
+    maxPreviousDeploymentArtifacts: 5
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - s3:*
+          Resource:
+            - !GetAtt StorageS3Bucket.Arn
+            - Fn::Join:
+                - ""
+                - - !GetAtt StorageS3Bucket.Arn
+                  - "*"
+
+functions:
+  root:
+    handler: app/api.handler
+    memorySize: 256
+    timeout: 30
+    events:
+      - http: ANY /
+
+resources:
+  Description: POC of a developer-friendly Pubsub service
+  Resources:
+    StorageS3Bucket:
+      Type: AWS::S3::Bucket
+
+    ApigatewayToS3Role:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: apigateway.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: apigatewaytos3
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                  Resource:
+                    - !GetAtt StorageS3Bucket.Arn
+                    - Fn::Join:
+                        - ""
+                        - - !GetAtt StorageS3Bucket.Arn
+                          - "*"
+
+    ApiGatewayResourceEvents:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        ParentId:
+          Fn::GetAtt:
+            - ApiGatewayRestApi
+            - RootResourceId
+        PathPart: events
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    TeamTopicResource:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        ParentId: !Ref ApiGatewayResourceEvents
+        PathPart: team_sample_topic
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    # POST method for the Team Topic
+    TeamTopicPostMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        HttpMethod: POST
+        RequestModels:
+          $default: !Ref TeamTopicModel
+        RequestValidatorId: !GetAtt GenericRequestValidator.RequestValidatorId
+        MethodResponses:
+          - ResponseModels:
+              application/json : 'Empty'
+            StatusCode: 200
+        RequestParameters:
+          method.request.header.Content-Type: true
+        Integration:
+          IntegrationHttpMethod: PUT
+          Type: AWS
+          Credentials:
+            Fn::GetAtt:
+              - ApigatewayToS3Role
+              - Arn
+          RequestParameters:
+            integration.request.header.Content-Type: method.request.header.Content-Type
+            integration.request.path.requestId: context.requestId
+            integration.request.path.topicName: "'MyTeamTopic'"
+            integration.request.path.reqTime: context.requestTime
+          Uri: 
+            Fn::Sub:
+              - arn:aws:apigateway:${AWS::Region}:s3:path/${StorageBucketName}/input/{topicName}/{requestId}.json
+              - StorageBucketName: !Ref StorageS3Bucket
+          IntegrationResponses:
+            - StatusCode: 200
+        ResourceId: !Ref TeamTopicResource
+        RestApiId: !Ref ApiGatewayRestApi
+
+    GenericRequestValidator:
+      Type: AWS::ApiGateway::RequestValidator
+      Properties:
+        Name: GenericRequestValidator
+        RestApiId: 
+          Ref: ApiGatewayRestApi
+        ValidateRequestBody: true
+        ValidateRequestParameters: true 
+
+
+    GatewayResponseInvalidPayload:
+      Type: 'AWS::ApiGateway::GatewayResponse'
+      Properties:
+        RestApiId:
+          Ref: 'ApiGatewayRestApi'
+        ResponseType: BAD_REQUEST_BODY
+        "StatusCode" : "400"
+        ResponseTemplates:
+          application/json: "{\"message\": \"$context.error.message\", \"error\": \"$context.error.validationErrorString\"}"
+
+    TeamTopicModel:
+      Type: 'AWS::ApiGateway::Model'
+      Properties:
+        RestApiId: !Ref ApiGatewayRestApi
+        ContentType: application/json
+        Description: Schema for TeamTopicModel
+        Name: TeamTopicModel
+        Schema:
+          $schema: 'http://json-schema.org/draft-04/schema#'
+          title: TeamMembersModel
+          type: object
+          required:
+            - teamName
+            - members
+          properties:
+            teamName:
+              type: string
+            members:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  favoriteNumber:
+                    type: number
+                required:
+                  - name
+

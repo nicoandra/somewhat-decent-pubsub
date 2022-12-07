@@ -1,0 +1,22 @@
+{
+  "name": "somewhat-decent-pubsub",
+  "version": "1.0.0",
+  "description": "A somewhat decent scalable and developer-friendly pubsub implementation",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com-perso:nicoandra/somewhat-decent-pubsub.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "serverless": "^3.25.1"
+  },
+  "devDependencies": {
+    "serverless-aws-documentation": "^1.1.0",
+    "serverless-reqvalidator-plugin": "^2.0.0"
+  }
+}
