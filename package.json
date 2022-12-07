@@ -15,8 +15,5 @@
   "dependencies": {
     "serverless": "^3.25.1"
   },
-  "devDependencies": {
-    "serverless-aws-documentation": "^1.1.0",
-    "serverless-reqvalidator-plugin": "^2.0.0"
-  }
+  "devDependencies": {}
 }
