@@ -77,6 +77,20 @@ functions:
     events:
       - http: ANY /
 
+  forwarder:
+    handler: app/forwarder.handler
+    memorySize: 256
+    timeout: 900
+    events:
+      - s3:
+          bucket: !Ref StorageS3Bucket
+          event: s3:ObjectCreated:*
+          existing: true
+          rules:
+            - suffix: .json
+              prefix: incomingEvents/
+
+
 resources:
   Description: POC of a developer-friendly Pubsub service
   Resources:
@@ -126,6 +140,44 @@ resources:
         RestApiId:
           Ref: ApiGatewayRestApi
 
+    GetPayloadResource:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        ParentId:
+          Ref: ApiGatewayResourceEvents
+        PathPart: "{pathToObject+}"
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    GetPayloadMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        HttpMethod: GET
+        RequestParameters:
+          method.request.path.pathToObject: true
+        AuthorizationType: NONE
+        ApiKeyRequired: false
+        ResourceId:
+          Ref: GetPayloadResource
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        Integration:
+          IntegrationHttpMethod: GET
+          Type: AWS
+          Credentials:
+            Fn::GetAtt:
+              - ApigatewayToS3Role
+              - Arn
+          Uri: 
+            Fn::Sub:
+              - arn:aws:apigateway:${AWS::Region}:s3:path/${StorageBucketName}/incomingEvents/{pathToObject}.json
+              - StorageBucketName: !Ref StorageS3Bucket              
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestParameters:
+            integration.request.path.pathToObject: method.request.path.pathToObject
+          IntegrationResponses: *S3IntegrationResponses
+        MethodResponses: *S3MethodResponses
+
     TeamTopicResource:
       Type: AWS::ApiGateway::Resource
       Properties:
@@ -163,7 +215,7 @@ resources:
             integration.request.path.reqTime: context.requestTime
           Uri: 
             Fn::Sub:
-              - arn:aws:apigateway:${AWS::Region}:s3:path/${StorageBucketName}/input/{topicName}/{requestId}.json
+              - arn:aws:apigateway:${AWS::Region}:s3:path/${StorageBucketName}/incomingEvents/{topicName}/{requestId}.json
               - StorageBucketName: !Ref StorageS3Bucket
           IntegrationResponses:
             - StatusCode: 200
